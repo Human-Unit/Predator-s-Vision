@@ -306,15 +306,33 @@ def _draw_side_gauges(out: np.ndarray, P: dict, h: int, w: int, t: float) -> Non
                     FONT, FONT_SCALE_SM * 0.7, col_s, FONT_THICKNESS, cv2.LINE_AA)
 
 
+def _draw_target_box_at(out: np.ndarray, P: dict, bx: int, by: int, bw: int, bh: int, label: str, threat: str, t: float) -> None:
+    """Helper to draw a single target bracket at specific coordinates."""
+    col_a = P["accent"]
+    col_s = P["secondary"]
+    blink = int(t * 3) % 2 == 0
+    col   = col_a if threat == "HIGH" else col_s
+    draw  = (threat == "HIGH" and blink) or threat != "HIGH"
+    if not draw:
+        return
+
+    arm = int(min(bw, bh) * 0.30)
+    for sx2, sy2 in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+        px = bx + bw if sx2 == 1 else bx
+        py = by + bh if sy2 == 1 else by
+        cv2.line(out, (px + sx2 * arm, py), (px, py),             col, 1, cv2.LINE_AA)
+        cv2.line(out, (px, py),             (px, py + sy2 * arm), col, 1, cv2.LINE_AA)
+    cv2.putText(out, f"[{label}]", (bx, by - 5),
+                FONT, FONT_SCALE_SM, col, FONT_THICKNESS, cv2.LINE_AA)
+    cv2.putText(out, threat, (bx + bw - 30, by - 5),
+                FONT, FONT_SCALE_SM, col, FONT_THICKNESS, cv2.LINE_AA)
+
+
 def _draw_target_boxes(out: np.ndarray, P: dict, cx: int, cy: int, h: int, w: int, t: float) -> None:
     """
     Two target acquisition brackets (corner-only L-shapes) with labels.
     Boxes blink when threat level is HIGH.
     """
-    col_a = P["accent"]
-    col_s = P["secondary"]
-    blink = int(t * 3) % 2 == 0
-
     targets = [
         {"x": cx - int(w * 0.30), "y": cy - int(h * 0.20), "bw": int(w * 0.10), "bh": int(h * 0.15),
          "label": "PREY-A", "threat": "HIGH"},
@@ -323,21 +341,7 @@ def _draw_target_boxes(out: np.ndarray, P: dict, cx: int, cy: int, h: int, w: in
     ]
 
     for tg in targets:
-        col  = col_a if tg["threat"] == "HIGH" else col_s
-        draw = (tg["threat"] == "HIGH" and blink) or tg["threat"] != "HIGH"
-        if not draw:
-            continue
-        bx, by, bw, bh = tg["x"], tg["y"], tg["bw"], tg["bh"]
-        arm = int(min(bw, bh) * 0.30)
-        for sx2, sy2 in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-            px = bx + bw if sx2 == 1 else bx
-            py = by + bh if sy2 == 1 else by
-            cv2.line(out, (px + sx2 * arm, py), (px, py),             col, 1, cv2.LINE_AA)
-            cv2.line(out, (px, py),             (px, py + sy2 * arm), col, 1, cv2.LINE_AA)
-        cv2.putText(out, f"[{tg['label']}]", (bx, by - 5),
-                    FONT, FONT_SCALE_SM, col, FONT_THICKNESS, cv2.LINE_AA)
-        cv2.putText(out, tg["threat"], (bx + bw - 30, by - 5),
-                    FONT, FONT_SCALE_SM, col, FONT_THICKNESS, cv2.LINE_AA)
+        _draw_target_box_at(out, P, tg["x"], tg["y"], tg["bw"], tg["bh"], tg["label"], tg["threat"], t)
 
 
 def _draw_ecg_wave(out: np.ndarray, col: tuple, h: int, w: int, t: float) -> None:
@@ -471,6 +475,7 @@ def draw_hud(
     mode:           str,
     error_state:    bool = False,
     routing_active: bool = False,
+    targets:        dict = None
 ) -> np.ndarray:
     """
     Composite all Yautja HUD elements onto *frame*.
@@ -507,11 +512,24 @@ def draw_hud(
     _draw_corner_brackets(out, col, h, w)
 
     # ── 4. Rotating reticle ─────────────────────────────────────────────────
-    _draw_reticle(out, P, cx, cy, t)
+    ret_x, ret_y = cx, cy
+    if mode == "AUTO_TARGET" and targets and targets.get("faces"):
+        # Track the first/largest face
+        f = targets["faces"][0]
+        ret_x = f[0] + f[2] // 2
+        ret_y = f[1] + f[3] // 2
+
+    _draw_reticle(out, P, ret_x, ret_y, t)
 
     # ── 5. Target boxes (mode-conditional) ──────────────────────────────────
     if mode in ("TARGET_HUD", "TACTICAL_ZOOM"):
         _draw_target_boxes(out, P, cx, cy, h, w, t)
+
+    if mode == "AUTO_TARGET" and targets:
+        for (fx, fy, fw, fh) in targets.get("faces", []):
+            _draw_target_box_at(out, P, fx, fy, fw, fh, "BIO-SIGN", "HIGH", t)
+        for (ex, ey, ew, eh) in targets.get("eyes", []):
+            cv2.circle(out, (ex + ew // 2, ey + eh // 2), 4, P["accent"], 1, cv2.LINE_AA)
 
     # ── 6. ECG wave ─────────────────────────────────────────────────────────
     _draw_ecg_wave(out, col, h, w, t)

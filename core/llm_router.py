@@ -34,6 +34,7 @@ Action Schemas:
   THERMAL_VISION  → {{}}
   TACTICAL_ZOOM   → {{"scale": <float 1.5–5.0, default 2.0>}}
   TARGET_HUD      → {{}}
+  AUTO_TARGET     → {{}}
   CLOAK_BLUR      → {{"strength": <odd int 5–99, default 25>}}
   SPECTRUM_SHIFT  → {{"shift_type": <"invert"|"red_only"|"green_only"|"blue_only">}}
   NORMAL_VISION   → {{}}
@@ -41,6 +42,7 @@ Action Schemas:
 Examples:
   "activate infrared heat vision"      → {{"action": "THERMAL_VISION",  "parameters": {{}}}}
   "zoom in 3.5x on the target"         → {{"action": "TACTICAL_ZOOM",   "parameters": {{"scale": 3.5}}}}
+  "lock on to a person"                → {{"action": "AUTO_TARGET",     "parameters": {{}}}}
   "engage optical cloaking distortion" → {{"action": "CLOAK_BLUR",      "parameters": {{"strength": 25}}}}
   "switch to ultraviolet spectrum"     → {{"action": "SPECTRUM_SHIFT",  "parameters": {{"shift_type": "blue_only"}}}}
   "reset visor to normal"              → {{"action": "NORMAL_VISION",   "parameters": {{}}}}
