@@ -21,6 +21,7 @@ Controls (focus the OpenCV window):
 import sys
 import threading
 import cv2
+import numpy as np
 
 from config.settings import (
     DEFAULT_IMAGE_PATH, WINDOW_NAME, APP_VERSION,
@@ -124,17 +125,22 @@ def trigger_command_input(state: VisorState, router: YautjaRouter) -> None:
 # ---------------------------------------------------------------------------
 # Frame render pipeline  (shared by both modes)
 # ---------------------------------------------------------------------------
-def _render(frame, state: VisorState) -> "np.ndarray":
+def _render(frame: np.ndarray, state: VisorState) -> np.ndarray:
     """Apply vision filter → HUD → optional glitch → lens distortion."""
-    targets = None
-    if state.mode == "AUTO_TARGET":
-        targets = detect_targets(frame)
+    try:
+        targets = None
+        if state.mode == "AUTO_TARGET":
+            targets = detect_targets(frame)
 
-    processed = apply_mode(frame, state.mode, state.params)
-    hud_frame = draw_hud(processed, state.mode, state.error_state, state.routing_active, targets=targets)
-    if state.consume_glitch_frame():
-        hud_frame = apply_glitch(hud_frame)
-    return apply_lens(hud_frame)
+        processed = apply_mode(frame, state.mode, state.params)
+        hud_frame = draw_hud(processed, state.mode, state.error_state, state.routing_active, targets=targets)
+        if state.consume_glitch_frame():
+            hud_frame = apply_glitch(hud_frame)
+        return apply_lens(hud_frame)
+    except Exception as e:
+        print(f"  [Bio-Mask] Render Error: {e}")
+        state.set_error()
+        return frame
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +203,12 @@ def run_passive_mode(router: YautjaRouter) -> None:
     print("  Focus the window → C = new command | Q = quit\n")
 
     while not state.exit_requested:
-        cv2.imshow(WINDOW_NAME, _render(base, state))
+        try:
+            rendered = _render(base, state)
+            cv2.imshow(WINDOW_NAME, rendered)
+        except Exception as e:
+            print(f"[error] Passive Mode display failed: {e}")
+            break
 
         key = cv2.waitKey(30) & 0xFF
         if key in (ord("q"), ord("Q")):
