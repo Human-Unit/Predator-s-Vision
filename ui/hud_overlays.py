@@ -57,6 +57,9 @@ def _palette(mode: str) -> dict:
 _VIGNETTE_CACHE: dict[tuple[int, int], np.ndarray] = {}
 _HEX_CACHE:      dict[tuple[int, int, str], np.ndarray] = {}
 
+# Pre-seed RNG for performance
+_RNG = np.random.default_rng()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,14 +70,10 @@ def _hud_color(mode: str, error: bool) -> tuple[int, int, int]:
     return _palette(mode)["primary"]
 
 
-def _get_vignette(h: int, w: int) -> np.ndarray:
+def _get_vignette_mask(h: int, w: int) -> np.ndarray:
     """
-    Cached float32 [0..1] radial vignette mask.
-
-    Wide sigma (0.65 × dimension) keeps the centre at 1.0 with
-    only a gentle darkening near the extreme corners (~72 % brightness).
-    This preserves full image quality in the viewing area while still
-    giving the curved-lens look at the periphery.
+    Cached 3-channel float32 [0..1] radial vignette mask.
+    Wide sigma keeps centre at 1.0 with gentle corner falloff.
     """
     key = (h, w)
     if key not in _VIGNETTE_CACHE:
@@ -82,8 +81,10 @@ def _get_vignette(h: int, w: int) -> np.ndarray:
         ky   = cv2.getGaussianKernel(h, h * 0.65)
         mask = ky * kx.T
         mask = mask / mask.max()
-        # centre = 1.0, corners ≈ 0.72 — barely noticeable on subject
-        _VIGNETTE_CACHE[key] = (0.72 + 0.28 * mask).astype(np.float32)
+        # centre = 1.0, corners ≈ 0.72
+        v2d  = (0.72 + 0.28 * mask).astype(np.float32)
+        # Cache as BGR to avoid broadcasting in every frame
+        _VIGNETTE_CACHE[key] = cv2.merge([v2d, v2d, v2d])
     return _VIGNETTE_CACHE[key]
 
 
@@ -122,30 +123,21 @@ def _get_hex_overlay(h: int, w: int, color_key: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 def apply_lens(frame: np.ndarray) -> np.ndarray:
     """
-    Two subtle optical effects:
-
-    1. Chromatic Aberration — ±1 px horizontal channel split (down from ±5 px).
-       At 1 px the colour fringing is barely perceptible to the eye but still
-       adds an authentic lens character without blurring the image.
-
-    2. Vignette — gentle edge darkening only; the centre region is untouched
-       (mask floor = 0.72) so the subject stays at full brightness.
+    Optimised lens post-processing:
+    1. Chromatic Aberration (1px split)
+    2. Vignette (gentle corner falloff)
     """
     h, w = frame.shape[:2]
 
-    # 1 px split — imperceptible blur, authentic lens feel
-    b = np.roll(frame[:, :, 0], -1, axis=1)
-    g = frame[:, :, 1]
-    r = np.roll(frame[:, :, 2],  1, axis=1)
-    aberrated = np.dstack((b, g, r))
+    # Optimized Chromatic Aberration: manual assignment to avoid dstack overhead
+    aberrated = np.empty_like(frame)
+    aberrated[:, :, 0] = np.roll(frame[:, :, 0], -1, axis=1)
+    aberrated[:, :, 1] = frame[:, :, 1]
+    aberrated[:, :, 2] = np.roll(frame[:, :, 2],  1, axis=1)
 
-    mask = _get_vignette(h, w)
-    out  = aberrated.astype(np.float32)
-    out[:, :, 0] *= mask
-    out[:, :, 1] *= mask
-    out[:, :, 2] *= mask
-
-    return np.clip(out, 0, 255).astype(np.uint8)
+    # Optimized Vignette: use cv2.multiply with 3-channel cached float mask
+    mask = _get_vignette_mask(h, w)
+    return cv2.multiply(aberrated, mask, dtype=cv2.CV_8U)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +342,8 @@ def _draw_ecg_wave(out: np.ndarray, col: tuple, h: int, w: int, t: float) -> Non
     x0, x1 = pad, w - pad
     y0    = h - int(h * 0.10)
     pts   = []
-    rng   = np.random.default_rng(seed=int(t * 30))
+    # Use deterministic temporal seed for jitter stability
+    rng_state = random.Random(int(t * 30))
 
     for x in range(x0, x1, 5):
         phase = ((x * 0.036) - t * 8.0) % (2 * math.pi)
@@ -362,7 +355,8 @@ def _draw_ecg_wave(out: np.ndarray, col: tuple, h: int, w: int, t: float) -> Non
             dy = -int(h * 0.012) * math.sin((phase - 1.20) / 0.45 * math.pi)
         else:
             dy = 0
-        dy += rng.normal(scale=0.6)
+        # Simple pseudo-random jitter instead of heavy rng.normal
+        dy += (rng_state.random() - 0.5) * 1.2
         pts.append([x, int(y0 + dy)])
 
     pts_arr = np.array(pts, dtype=np.int32)
@@ -500,26 +494,33 @@ def draw_hud(
     col         = _hud_color(mode, error_state)
     t           = time.time()
 
+    # Determine if HUD should be simplified for low resolution
+    # Threshold: 640x480 or smaller
+    is_low_res = (w < 640 or h < 480)
+
     # ── 1. Hex mesh ─────────────────────────────────────────────────────────
-    _draw_hex_mesh(out, mode if not error_state else "_default", alpha=0.06)
+    if not is_low_res:
+        _draw_hex_mesh(out, mode if not error_state else "_default", alpha=0.06)
 
     # (No scanlines — preserves full image quality)
 
     # ── 2. Side gauges ──────────────────────────────────────────────────────
-    _draw_side_gauges(out, P, h, w, t)
+    if not is_low_res:
+        _draw_side_gauges(out, P, h, w, t)
 
     # ── 3. Corner brackets ──────────────────────────────────────────────────
     _draw_corner_brackets(out, col, h, w)
 
     # ── 4. Rotating reticle ─────────────────────────────────────────────────
-    ret_x, ret_y = cx, cy
-    if mode == "AUTO_TARGET" and targets and targets.get("faces"):
-        # Track the first/largest face
-        f = targets["faces"][0]
-        ret_x = f[0] + f[2] // 2
-        ret_y = f[1] + f[3] // 2
+    if mode in ("TARGET_HUD", "AUTO_TARGET"):
+        ret_x, ret_y = cx, cy
+        if mode == "AUTO_TARGET" and targets and targets.get("faces"):
+            # Track the first/largest face
+            f = targets["faces"][0]
+            ret_x = f[0] + f[2] // 2
+            ret_y = f[1] + f[3] // 2
 
-    _draw_reticle(out, P, ret_x, ret_y, t)
+        _draw_reticle(out, P, ret_x, ret_y, t)
 
     # ── 5. Target boxes (mode-conditional) ──────────────────────────────────
     if mode in ("TARGET_HUD", "TACTICAL_ZOOM"):
@@ -532,16 +533,20 @@ def draw_hud(
             cv2.circle(out, (ex + ew // 2, ey + eh // 2), 4, P["accent"], 1, cv2.LINE_AA)
 
     # ── 6. ECG wave ─────────────────────────────────────────────────────────
-    _draw_ecg_wave(out, col, h, w, t)
+    if not is_low_res:
+        _draw_ecg_wave(out, col, h, w, t)
 
     # ── 7. Telemetry panels ──────────────────────────────────────────────────
-    _draw_telemetry(out, P, h, w, t, mode)
+    if not is_low_res:
+        _draw_telemetry(out, P, h, w, t, mode)
 
     # ── 8. Header ────────────────────────────────────────────────────────────
-    _draw_header(out, P, h, w, t, mode)
+    if not is_low_res:
+        _draw_header(out, P, h, w, t, mode)
 
     # ── 9. Footer ───────────────────────────────────────────────────────────
-    _draw_footer(out, P, h, w, t)
+    if not is_low_res:
+        _draw_footer(out, P, h, w, t)
 
     # ── 10. Routing banner ───────────────────────────────────────────────────
     if routing_active and int(t * 3) % 2 == 0:
