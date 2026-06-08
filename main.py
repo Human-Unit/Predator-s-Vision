@@ -20,6 +20,8 @@ Controls (focus the OpenCV window):
 
 import sys
 import threading
+import multiprocessing
+import queue
 import cv2
 import numpy as np
 
@@ -29,7 +31,8 @@ from config.settings import (
 )
 from core.llm_router   import YautjaRouter
 from core.vision_engine import apply_mode
-from core.detection    import detect_targets
+from core.detection    import TargetTracker
+from core.audio_engine import engine as audio
 from ui.hud_overlays   import draw_hud, apply_lens, apply_glitch
 
 
@@ -47,10 +50,13 @@ class VisorState:
         self.routing_active   = False
         self.glitch_frames    = 0
         self.exit_requested   = False
+        self.last_targets     = None
 
     # Convenience setters that acquire the lock
     def set_mode(self, mode: str, params: dict) -> None:
         with self._lock:
+            if self.mode != mode:
+                audio.play("MODE_CHANGE")
             self.mode          = mode
             self.params        = params
             self.error_state   = False
@@ -123,24 +129,51 @@ def trigger_command_input(state: VisorState, router: YautjaRouter) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frame render pipeline  (shared by both modes)
+# Multiprocessing Worker
 # ---------------------------------------------------------------------------
-def _render(frame: np.ndarray, state: VisorState) -> np.ndarray:
-    """Apply vision filter → HUD → optional glitch → lens distortion."""
-    try:
-        targets = None
-        if state.mode == "AUTO_TARGET":
-            targets = detect_targets(frame)
+def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Queue) -> None:
+    """
+    Sub-process that handles the heavy VisionEngine and HUD rendering.
+    Bypasses the GIL to allow the main thread to focus on UI and I/O.
+    """
+    tracker = TargetTracker()
+    frame_count = 0
+    last_targets = None
 
-        processed = apply_mode(frame, state.mode, state.params)
-        hud_frame = draw_hud(processed, state.mode, state.error_state, state.routing_active, targets=targets)
-        if state.consume_glitch_frame():
-            hud_frame = apply_glitch(hud_frame)
-        return apply_lens(hud_frame)
-    except Exception as e:
-        print(f"  [Bio-Mask] Render Error: {e}")
-        state.set_error()
-        return frame
+    while True:
+        try:
+            # Get work: (frame, mode, params, error_state, routing_active)
+            task = input_q.get(timeout=1.0)
+            if task is None: break  # Sentinel
+
+            frame, mode, params, error_state, routing_active = task
+
+            # 1. Detection / Tracking
+            targets = None
+            if mode == "AUTO_TARGET":
+                force_detect = (frame_count % 15 == 0)
+                targets = tracker.update(frame, force_detect=force_detect)
+                last_targets = targets
+                frame_count += 1
+
+            # 2. Vision Filter
+            processed = apply_mode(frame, mode, params)
+
+            # 3. HUD Layer
+            hud_frame = draw_hud(processed, mode, error_state, routing_active, targets=targets)
+
+            # 4. Lens Distortion (final post-process)
+            final = apply_lens(hud_frame)
+
+            # Send result back
+            output_q.put((final, targets, force_detect if mode == "AUTO_TARGET" else False))
+
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"  [Worker] Process error: {e}")
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +181,12 @@ def _render(frame: np.ndarray, state: VisorState) -> np.ndarray:
 # ---------------------------------------------------------------------------
 def run_active_mode(router: YautjaRouter) -> None:
     state = VisorState()
+
+    # Start Vision Worker Process
+    input_q = multiprocessing.Queue(maxsize=2)
+    output_q = multiprocessing.Queue(maxsize=2)
+    worker = multiprocessing.Process(target=_vision_worker, args=(input_q, output_q), daemon=True)
+    worker.start()
 
     print("\n[SYS] Initialising camera…")
     cap = cv2.VideoCapture(0)
@@ -171,9 +210,23 @@ def run_active_mode(router: YautjaRouter) -> None:
         # Remove mirror effect (standard for webcams in OpenCV)
         frame = cv2.flip(frame, 1)
 
-        cv2.imshow(WINDOW_NAME, _render(frame, state))
+        # Offload rendering to worker process
+        try:
+            # Non-blocking put
+            input_q.put_nowait((frame, state.mode, state.params, state.error_state, state.routing_active))
 
-        key = cv2.waitKey(30) & 0xFF
+            # Blocking get (wait for previous or current frame)
+            rendered, targets, detected = output_q.get(timeout=0.1)
+
+            # Handle sound in main thread
+            if detected and targets and targets.get("faces"):
+                audio.play("TARGET_LOCK")
+
+            cv2.imshow(WINDOW_NAME, rendered)
+        except (queue.Full, queue.Empty):
+            pass # Skip frame or wait
+
+        key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), ord("Q")):
             print("[bye] Shutting down telemetry feed.")
             break
@@ -190,6 +243,12 @@ def run_active_mode(router: YautjaRouter) -> None:
 def run_passive_mode(router: YautjaRouter) -> None:
     state = VisorState()
 
+    # Start Vision Worker Process
+    input_q = multiprocessing.Queue(maxsize=2)
+    output_q = multiprocessing.Queue(maxsize=2)
+    worker = multiprocessing.Process(target=_vision_worker, args=(input_q, output_q), daemon=True)
+    worker.start()
+
     raw_path = input(f"Image path [default: {DEFAULT_IMAGE_PATH}]: ").strip()
     image_path = raw_path or DEFAULT_IMAGE_PATH
 
@@ -204,11 +263,13 @@ def run_passive_mode(router: YautjaRouter) -> None:
 
     while not state.exit_requested:
         try:
-            rendered = _render(base, state)
+            input_q.put_nowait((base, state.mode, state.params, state.error_state, state.routing_active))
+            rendered, _, _ = output_q.get(timeout=0.1)
             cv2.imshow(WINDOW_NAME, rendered)
         except Exception as e:
-            print(f"[error] Passive Mode display failed: {e}")
-            break
+            if not isinstance(e, (queue.Full, queue.Empty)):
+                print(f"[error] Passive Mode display failed: {e}")
+                break
 
         key = cv2.waitKey(30) & 0xFF
         if key in (ord("q"), ord("Q")):

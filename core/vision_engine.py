@@ -41,15 +41,7 @@ def apply_thermal(frame: np.ndarray) -> np.ndarray:
 def apply_zoom(frame: np.ndarray, scale: float = DEFAULT_ZOOM_SCALE) -> np.ndarray:
     """
     Simulate a digital weapon-scope zoom by center-cropping then upscaling.
-
-    Steps:
-      1. Compute a crop region of size (W/scale × H/scale) centred on the frame.
-      2. Resize the crop back to the original (W × H) using Lanczos4 interpolation.
-         Lanczos4 is the sharpest resampling filter available in OpenCV and avoids
-         the blurring artefacts of bilinear or nearest-neighbour methods.
-
-    Args:
-        scale: Zoom magnification factor (clamped to [1.1, 10.0]).
+    Uses cv2.UMat for OpenCL-accelerated resizing if available.
     """
     try:
         scale = float(scale)
@@ -68,7 +60,11 @@ def apply_zoom(frame: np.ndarray, scale: float = DEFAULT_ZOOM_SCALE) -> np.ndarr
     y2 = min(h, y1 + crop_h)
 
     cropped = frame[y1:y2, x1:x2]
-    return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+    # GPU Acceleration: Wrap in UMat for OpenCL resize
+    umat = cv2.UMat(cropped)
+    resized = cv2.resize(umat, (w, h), interpolation=cv2.INTER_LANCZOS4)
+    return resized.get()
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +114,7 @@ def apply_target_hud(frame: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 def apply_cloak(frame: np.ndarray, strength: int = DEFAULT_BLUR_STRENGTH) -> np.ndarray:
     """
-    Simulate the shimmering optical distortion of active camouflage.
-
-    Pipeline:
-      1. Apply a heavy Gaussian blur (the "cloak" body).
-      2. Compute a Laplacian edge map of the original frame (the silhouette).
-      3. Tint edges cyan (BGR 255, 255, 0) to represent bent light rays.
-      4. Blend 88 % blurred + 12 % edge highlight with cv2.addWeighted().
-
-    The Gaussian kernel is forced to be an odd integer as required by OpenCV.
+    Simulate active camouflage with OpenCL acceleration.
     """
     try:
         k = int(strength)
@@ -134,17 +122,49 @@ def apply_cloak(frame: np.ndarray, strength: int = DEFAULT_BLUR_STRENGTH) -> np.
         k = DEFAULT_BLUR_STRENGTH
     k = max(3, min(k, 199))
     if k % 2 == 0:
-        k += 1  # kernel_size must be odd for cv2.GaussianBlur
+        k += 1
 
-    blurred = cv2.GaussianBlur(frame, (k, k), sigmaX=0)
+    # GPU Acceleration: Wrap in UMat for heavy GaussianBlur and Laplacian
+    umat = cv2.UMat(frame)
+    blurred_umat = cv2.GaussianBlur(umat, (k, k), sigmaX=0)
 
-    gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Laplacian(gray, cv2.CV_8U, ksize=3)
+    gray_umat  = cv2.cvtColor(umat, cv2.COLOR_BGR2GRAY)
+    edges_umat = cv2.Laplacian(gray_umat, cv2.CV_8U, ksize=3)
+
+    # Back to CPU for channel manipulation (OpenCV UMat support for slicing is limited)
+    edges = edges_umat.get()
     edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-    # Zero out the red channel → remaining cyan (B=255, G=255, R=0)
     edges_bgr[:, :, 2] = 0
 
-    return cv2.addWeighted(blurred, 0.88, edges_bgr, 0.12, gamma=0)
+    return cv2.addWeighted(blurred_umat.get(), 0.88, edges_bgr, 0.12, gamma=0)
+
+
+# ---------------------------------------------------------------------------
+# NIGHT_VISION
+# ---------------------------------------------------------------------------
+def apply_night_vision(frame: np.ndarray) -> np.ndarray:
+    """
+    Simulate Yautja light-amplification mode (high-contrast blue/gray).
+
+    Steps:
+      1. Convert to grayscale.
+      2. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to
+         amplify faint details without blowing out highlights.
+      3. Tint the resulting map with a custom blue/gray BGR profile.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Light amplification via CLAHE
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    amplified = clahe.apply(gray)
+
+    # High-contrast Yautja Blue/Gray tinting
+    # Mapping: B=0.9, G=0.65, R=0.5
+    b = (amplified * 0.90).astype(np.uint8)
+    g = (amplified * 0.65).astype(np.uint8)
+    r = (amplified * 0.50).astype(np.uint8)
+
+    return cv2.merge([b, g, r])
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +225,9 @@ def apply_mode(frame: np.ndarray, mode: str, params: dict) -> np.ndarray:
 
     if mode == "SPECTRUM_SHIFT":
         return apply_spectrum(frame, shift_type=params.get("shift_type", DEFAULT_SPECTRUM_TYPE))
+
+    if mode == "NIGHT_VISION":
+        return apply_night_vision(frame)
 
     # NORMAL_VISION or any unrecognised mode → pass-through
     return frame.copy()

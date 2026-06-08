@@ -44,6 +44,7 @@ _PALETTES = {
     "TARGET_HUD":    {"primary": (50, 220,  50), "secondary": (200, 220,  0), "accent": (40,  40, 220)},
     "CLOAK_BLUR":    {"primary": (220, 160,  0), "secondary": (255, 210, 60), "accent": (160,  80, 255)},
     "TACTICAL_ZOOM": {"primary": (0,  220, 180), "secondary": (0,  255, 120), "accent": (0,  140, 255)},
+    "NIGHT_VISION":  {"primary": (255, 180,  0), "secondary": (255, 100, 50), "accent": (255, 255, 255)},
     "_default":      {"primary": (60, 220,  60), "secondary": (0,  200, 100), "accent": (60,  60, 200)},
 }
 
