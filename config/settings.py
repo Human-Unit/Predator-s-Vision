@@ -9,6 +9,10 @@ anywhere in the codebase instead of hardcoding values.
 """
 
 import os
+from dotenv import load_dotenv
+
+# Load .env file if it exists
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # API / LLM Configuration
