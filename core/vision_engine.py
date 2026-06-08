@@ -148,6 +148,34 @@ def apply_cloak(frame: np.ndarray, strength: int = DEFAULT_BLUR_STRENGTH) -> np.
 
 
 # ---------------------------------------------------------------------------
+# NIGHT_VISION
+# ---------------------------------------------------------------------------
+def apply_night_vision(frame: np.ndarray) -> np.ndarray:
+    """
+    Simulate Yautja light-amplification mode (high-contrast blue/gray).
+
+    Steps:
+      1. Convert to grayscale.
+      2. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to
+         amplify faint details without blowing out highlights.
+      3. Tint the resulting map with a custom blue/gray BGR profile.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Light amplification via CLAHE
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    amplified = clahe.apply(gray)
+
+    # High-contrast Yautja Blue/Gray tinting
+    # Mapping: B=0.9, G=0.65, R=0.5
+    b = (amplified * 0.90).astype(np.uint8)
+    g = (amplified * 0.65).astype(np.uint8)
+    r = (amplified * 0.50).astype(np.uint8)
+
+    return cv2.merge([b, g, r])
+
+
+# ---------------------------------------------------------------------------
 # SPECTRUM_SHIFT
 # ---------------------------------------------------------------------------
 def apply_spectrum(frame: np.ndarray, shift_type: str = DEFAULT_SPECTRUM_TYPE) -> np.ndarray:
@@ -205,6 +233,9 @@ def apply_mode(frame: np.ndarray, mode: str, params: dict) -> np.ndarray:
 
     if mode == "SPECTRUM_SHIFT":
         return apply_spectrum(frame, shift_type=params.get("shift_type", DEFAULT_SPECTRUM_TYPE))
+
+    if mode == "NIGHT_VISION":
+        return apply_night_vision(frame)
 
     # NORMAL_VISION or any unrecognised mode → pass-through
     return frame.copy()

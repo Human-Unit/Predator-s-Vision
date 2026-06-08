@@ -37,6 +37,7 @@ Action Schemas:
   AUTO_TARGET     → {{}}
   CLOAK_BLUR      → {{"strength": <odd int 5–99, default 25>}}
   SPECTRUM_SHIFT  → {{"shift_type": <"invert"|"red_only"|"green_only"|"blue_only">}}
+  NIGHT_VISION    → {{}}
   NORMAL_VISION   → {{}}
 
 Examples:
@@ -45,6 +46,7 @@ Examples:
   "lock on to a person"                → {{"action": "AUTO_TARGET",     "parameters": {{}}}}
   "engage optical cloaking distortion" → {{"action": "CLOAK_BLUR",      "parameters": {{"strength": 25}}}}
   "switch to ultraviolet spectrum"     → {{"action": "SPECTRUM_SHIFT",  "parameters": {{"shift_type": "blue_only"}}}}
+  "activate night vision"              → {{"action": "NIGHT_VISION",    "parameters": {{}}}}
   "reset visor to normal"              → {{"action": "NORMAL_VISION",   "parameters": {{}}}}
 """
 

@@ -47,6 +47,8 @@ class VisorState:
         self.routing_active   = False
         self.glitch_frames    = 0
         self.exit_requested   = False
+        self.last_targets     = None
+        self.detection_frame_count = 0
 
     # Convenience setters that acquire the lock
     def set_mode(self, mode: str, params: dict) -> None:
@@ -130,7 +132,11 @@ def _render(frame: np.ndarray, state: VisorState) -> np.ndarray:
     try:
         targets = None
         if state.mode == "AUTO_TARGET":
-            targets = detect_targets(frame)
+            # Optimization: Run detection every 3 frames to save CPU
+            if state.detection_frame_count % 3 == 0:
+                state.last_targets = detect_targets(frame)
+            targets = state.last_targets
+            state.detection_frame_count += 1
 
         processed = apply_mode(frame, state.mode, state.params)
         hud_frame = draw_hud(processed, state.mode, state.error_state, state.routing_active, targets=targets)
