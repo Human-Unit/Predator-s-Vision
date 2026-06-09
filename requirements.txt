@@ -8,7 +8,9 @@
 #   The defaults in config/settings.py point to http://127.0.0.1:1234/v1.
 
 opencv-python>=4.8.0       # Core computer vision and rendering
+opencv-contrib-python>=4.8.0 # Legacy trackers and extra modules
 openai>=1.0.0              # OpenAI-compatible API client (works with LM Studio / Ollama)
 numpy>=1.24.0              # Array math used throughout the vision pipeline
 python-dotenv>=1.0.0       # Optional: load .env file for API credentials
 pygame>=2.5.0              # Audio engine for HUD sound effects
+mediapipe>=0.10.0          # Hand gesture recognition

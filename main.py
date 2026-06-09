@@ -31,7 +31,7 @@ from config.settings import (
 )
 from core.llm_router   import YautjaRouter
 from core.vision_engine import apply_mode
-from core.detection    import TargetTracker
+from core.detection    import TargetTracker, detect_gesture
 from core.audio_engine import engine as audio
 from ui.hud_overlays   import draw_hud, apply_lens, apply_glitch
 
@@ -51,6 +51,8 @@ class VisorState:
         self.glitch_frames    = 0
         self.exit_requested   = False
         self.last_targets     = None
+        self.recording        = False
+        self.video_writer     = None
 
     # Convenience setters that acquire the lock
     def set_mode(self, mode: str, params: dict) -> None:
@@ -101,6 +103,18 @@ def _prompt_and_route(state: VisorState, router: YautjaRouter) -> None:
         state.routing_active = False
         return
 
+    if cmd.lower() == "record":
+        with state._lock:
+            state.recording = not state.recording
+            if not state.recording and state.video_writer:
+                state.video_writer.release()
+                state.video_writer = None
+                print("  [Bio-Mask] Recording stopped and saved.")
+            elif state.recording:
+                print("  [Bio-Mask] Recording started...")
+        state.routing_active = False
+        return
+
     if not cmd:
         state.routing_active = False
         return
@@ -137,6 +151,7 @@ def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Que
     Bypasses the GIL to allow the main thread to focus on UI and I/O.
     """
     tracker = TargetTracker()
+    bg_sub = cv2.createBackgroundSubtractorMOG2(history=50, varThreshold=25, detectShadows=False)
     frame_count = 0
     last_targets = None
 
@@ -148,25 +163,40 @@ def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Que
 
             frame, mode, params, error_state, routing_active = task
 
-            # 1. Detection / Tracking
-            targets = None
+            # 1. Gesture Control (every 5 frames to save CPU)
+            gesture = None
+            if frame_count % 5 == 0:
+                gesture = detect_gesture(frame)
+
+            # 2. Detection / Tracking
+            targets = {"faces": [], "eyes": [], "motion": []}
             if mode == "AUTO_TARGET":
                 force_detect = (frame_count % 15 == 0)
-                targets = tracker.update(frame, force_detect=force_detect)
+                targets.update(tracker.update(frame, force_detect=force_detect))
                 last_targets = targets
-                frame_count += 1
 
-            # 2. Vision Filter
+            frame_count += 1
+
+            # 2. Motion Detection (for Radar)
+            fg_mask = bg_sub.apply(frame)
+            if frame_count % 2 == 0: # Downsample motion check
+                contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for cnt in contours:
+                    if cv2.contourArea(cnt) > 500:
+                        mx, my, mw, mh = cv2.boundingRect(cnt)
+                        targets["motion"].append([mx + mw//2, my + mh//2])
+
+            # 3. Vision Filter
             processed = apply_mode(frame, mode, params)
 
-            # 3. HUD Layer
+            # 4. HUD Layer
             hud_frame = draw_hud(processed, mode, error_state, routing_active, targets=targets)
 
-            # 4. Lens Distortion (final post-process)
+            # 5. Lens Distortion (final post-process)
             final = apply_lens(hud_frame)
 
             # Send result back
-            output_q.put((final, targets, force_detect if mode == "AUTO_TARGET" else False))
+            output_q.put((final, targets, force_detect if mode == "AUTO_TARGET" else False, gesture))
 
         except queue.Empty:
             continue
@@ -216,11 +246,29 @@ def run_active_mode(router: YautjaRouter) -> None:
             input_q.put_nowait((frame, state.mode, state.params, state.error_state, state.routing_active))
 
             # Blocking get (wait for previous or current frame)
-            rendered, targets, detected = output_q.get(timeout=0.1)
+            rendered, targets, detected, gesture = output_q.get(timeout=0.1)
+
+            # Handle gesture triggers in main thread
+            if gesture == "OPEN_PALM":
+                state.set_mode("CLOAK_BLUR", {"strength": 25})
+            elif gesture == "PEACE":
+                state.set_mode("THERMAL_VISION", {})
+            elif gesture == "POINTING":
+                state.set_mode("TARGET_HUD", {})
 
             # Handle sound in main thread
             if detected and targets and targets.get("faces"):
                 audio.play("TARGET_LOCK")
+
+            # Handle Recording
+            if state.recording:
+                if state.video_writer is None:
+                    h, w = rendered.shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    state.video_writer = cv2.VideoWriter('combat_log.mp4', fourcc, 20.0, (w, h))
+                state.video_writer.write(rendered)
+                # Visual indicator for recording
+                cv2.circle(rendered, (30, 30), 10, (0, 0, 255), -1, cv2.LINE_AA)
 
             cv2.imshow(WINDOW_NAME, rendered)
         except (queue.Full, queue.Empty):
@@ -264,7 +312,7 @@ def run_passive_mode(router: YautjaRouter) -> None:
     while not state.exit_requested:
         try:
             input_q.put_nowait((base, state.mode, state.params, state.error_state, state.routing_active))
-            rendered, _, _ = output_q.get(timeout=0.1)
+            rendered, _, _, _ = output_q.get(timeout=0.1)
             cv2.imshow(WINDOW_NAME, rendered)
         except Exception as e:
             if not isinstance(e, (queue.Full, queue.Empty)):

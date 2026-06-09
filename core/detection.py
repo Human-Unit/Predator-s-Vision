@@ -6,10 +6,47 @@ Haar-cascade based face and eye detection for the Yautja Bio-Mask.
 
 import cv2
 import numpy as np
+import mediapipe as mp
 
 # Load cascades once
 _FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 _EYE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+# Mediapipe Hands
+_MP_HANDS = mp.solutions.hands
+_HANDS = _MP_HANDS.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.7)
+
+def detect_gesture(frame: np.ndarray) -> str:
+    """
+    Detect hand gestures to trigger visor modes.
+    Returns: "OPEN_PALM", "PEACE", "POINTING", or None
+    """
+    results = _HANDS.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    if not results.multi_hand_landmarks:
+        return None
+
+    landmarks = results.multi_hand_landmarks[0].landmark
+
+    # 1. Open Palm (all fingers extended)
+    fingers_up = []
+    # Thumb (x-axis comparison for left/right hand simplified)
+    fingers_up.append(landmarks[4].x < landmarks[3].x)
+    # Fingers (y-axis: tip above pip)
+    for tip, pip in [(8, 6), (12, 10), (16, 14), (20, 18)]:
+        fingers_up.append(landmarks[tip].y < landmarks[pip].y)
+
+    if all(fingers_up):
+        return "OPEN_PALM"
+
+    # 2. Peace Sign (Index and Middle up)
+    if fingers_up[1] and fingers_up[2] and not any(fingers_up[3:]):
+        return "PEACE"
+
+    # 3. Pointing (Index up)
+    if fingers_up[1] and not any(fingers_up[2:]):
+        return "POINTING"
+
+    return None
 
 class TargetTracker:
     """
