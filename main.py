@@ -161,7 +161,7 @@ def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Que
             task = input_q.get(timeout=1.0)
             if task is None: break  # Sentinel
 
-            frame, mode, params, error_state, routing_active = task
+            frame, mode, params, error_state, routing_active, glitch_active = task
 
             # 1. Gesture Control (every 5 frames to save CPU)
             gesture = None
@@ -170,7 +170,9 @@ def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Que
 
             # 2. Detection / Tracking
             targets = {"faces": [], "eyes": [], "motion": []}
-            if mode == "AUTO_TARGET":
+            force_detect = False
+
+            if mode in ("AUTO_TARGET", "TARGET_HUD"):
                 force_detect = (frame_count % 15 == 0)
                 targets.update(tracker.update(frame, force_detect=force_detect))
                 last_targets = targets
@@ -192,7 +194,11 @@ def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Que
             # 4. HUD Layer
             hud_frame = draw_hud(processed, mode, error_state, routing_active, targets=targets)
 
-            # 5. Lens Distortion (final post-process)
+            # 5. Glitch Layer
+            if glitch_active:
+                hud_frame = apply_glitch(hud_frame)
+
+            # 6. Lens Distortion (final post-process)
             final = apply_lens(hud_frame)
 
             # Send result back
@@ -243,7 +249,7 @@ def run_active_mode(router: YautjaRouter) -> None:
         # Offload rendering to worker process
         try:
             # Non-blocking put
-            input_q.put_nowait((frame, state.mode, state.params, state.error_state, state.routing_active))
+            input_q.put_nowait((frame, state.mode, state.params, state.error_state, state.routing_active, state.consume_glitch_frame()))
 
             # Blocking get (wait for previous or current frame)
             rendered, targets, detected, gesture = output_q.get(timeout=0.1)
@@ -258,7 +264,10 @@ def run_active_mode(router: YautjaRouter) -> None:
 
             # Handle sound in main thread
             if detected and targets and targets.get("faces"):
-                audio.play("TARGET_LOCK")
+                if not state.last_targets or not state.last_targets.get("faces"):
+                    audio.play("TARGET_LOCK")
+
+            state.last_targets = targets
 
             # Handle Recording
             if state.recording:
@@ -311,7 +320,7 @@ def run_passive_mode(router: YautjaRouter) -> None:
 
     while not state.exit_requested:
         try:
-            input_q.put_nowait((base, state.mode, state.params, state.error_state, state.routing_active))
+            input_q.put_nowait((base, state.mode, state.params, state.error_state, state.routing_active, state.consume_glitch_frame()))
             rendered, _, _, _ = output_q.get(timeout=0.1)
             cv2.imshow(WINDOW_NAME, rendered)
         except Exception as e:

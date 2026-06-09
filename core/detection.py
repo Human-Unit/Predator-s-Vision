@@ -4,6 +4,7 @@ core/detection.py
 Haar-cascade based face and eye detection for the Yautja Bio-Mask.
 """
 
+import math
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -29,8 +30,12 @@ def detect_gesture(frame: np.ndarray) -> str:
 
     # 1. Open Palm (all fingers extended)
     fingers_up = []
-    # Thumb (x-axis comparison for left/right hand simplified)
-    fingers_up.append(landmarks[4].x < landmarks[3].x)
+
+    # Thumb: Check distance between tip and pinky base to determine if open
+    # (More reliable than simple x-axis for different hand rotations)
+    thumb_open = math.sqrt((landmarks[4].x - landmarks[17].x)**2 + (landmarks[4].y - landmarks[17].y)**2) > 0.15
+    fingers_up.append(thumb_open)
+
     # Fingers (y-axis: tip above pip)
     for tip, pip in [(8, 6), (12, 10), (16, 14), (20, 18)]:
         fingers_up.append(landmarks[tip].y < landmarks[pip].y)
@@ -75,16 +80,24 @@ class TargetTracker:
                 target = faces[0]
                 self.last_rect = [int(x) for x in target]
 
-                # Re-init tracker
-                self.tracker = cv2.legacy.TrackerMOSSE_create()
-                self.tracker.init(frame, tuple(self.last_rect))
+                # Re-init tracker with error handling
+                try:
+                    self.tracker = cv2.legacy.TrackerMOSSE_create()
+                    self.tracker.init(frame, tuple(self.last_rect))
+                except Exception as e:
+                    print(f"  [Tracker] Initialization failed: {e}")
+                    self.tracker = None
             else:
                 self.tracker = None
                 self.last_rect = None
 
         # 2. Update tracker if active
         elif self.tracker is not None:
-            success, rect = self.tracker.update(frame)
+            try:
+                success, rect = self.tracker.update(frame)
+            except Exception as e:
+                print(f"  [Tracker] Update failed: {e}")
+                success = False
             if success:
                 self.last_rect = [int(x) for x in rect]
             else:

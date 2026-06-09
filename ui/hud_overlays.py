@@ -559,9 +559,10 @@ def draw_hud(
     _draw_corner_brackets(out, col, h, w)
 
     # ── 4. Rotating reticle ─────────────────────────────────────────────────
+    # Aiming reticle is enabled for TARGET_HUD and AUTO_TARGET
     if mode in ("TARGET_HUD", "AUTO_TARGET"):
         ret_x, ret_y = cx, cy
-        if mode == "AUTO_TARGET" and targets and targets.get("faces"):
+        if targets and targets.get("faces"):
             # Track the first/largest face
             f = targets["faces"][0]
             ret_x = f[0] + f[2] // 2
@@ -570,10 +571,11 @@ def draw_hud(
         _draw_reticle(out, P, ret_x, ret_y, t)
 
     # ── 5. Target boxes (mode-conditional) ──────────────────────────────────
-    if mode in ("TARGET_HUD", "TACTICAL_ZOOM"):
+    # TACTICAL_ZOOM shows static brackets; AUTO_TARGET shows dynamic locks
+    if mode == "TACTICAL_ZOOM":
         _draw_target_boxes(out, P, cx, cy, h, w, t)
 
-    if mode == "AUTO_TARGET" and targets:
+    if mode in ("AUTO_TARGET", "TARGET_HUD") and targets:
         for (fx, fy, fw, fh) in targets.get("faces", []):
             _draw_target_box_at(out, P, fx, fy, fw, fh, "BIO-SIGN", "HIGH", t)
         for (ex, ey, ew, eh) in targets.get("eyes", []):

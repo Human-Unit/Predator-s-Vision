@@ -68,48 +68,6 @@ def apply_zoom(frame: np.ndarray, scale: float = DEFAULT_ZOOM_SCALE) -> np.ndarr
 
 
 # ---------------------------------------------------------------------------
-# TARGET_HUD
-# ---------------------------------------------------------------------------
-def apply_target_hud(frame: np.ndarray) -> np.ndarray:
-    """
-    Draw targeting crosshairs, focal rings, and corner lock-on brackets.
-
-    All geometric primitives are drawn with cv2.LINE_AA for sub-pixel
-    anti-aliasing, giving the reticle a sharp, crisp appearance even at
-    lower resolutions.  The rotating outer ring and mode-specific notches
-    are handled separately in ui/hud_overlays.py to keep this function
-    stateless and frame-independent.
-    """
-    out  = frame.copy()
-    h, w = out.shape[:2]
-    cx, cy = w // 2, h // 2
-    red  = (0, 0, 255)
-
-    # Central dot + inner ring
-    cv2.circle(out, (cx, cy), 14, red, 1, lineType=cv2.LINE_AA)
-    cv2.circle(out, (cx, cy),  2, red, -1)
-
-    # Crosshair gap lines (leave a 10-px gap around centre to avoid occlusion)
-    gap = 10
-    arm = 28
-    cv2.line(out, (cx - arm - gap, cy), (cx - gap, cy), red, 1, cv2.LINE_AA)
-    cv2.line(out, (cx + gap, cy), (cx + arm + gap, cy), red, 1, cv2.LINE_AA)
-    cv2.line(out, (cx, cy - arm - gap), (cx, cy - gap), red, 1, cv2.LINE_AA)
-    cv2.line(out, (cx, cy + gap), (cx, cy + arm + gap), red, 1, cv2.LINE_AA)
-
-    # Corner lock-on brackets
-    b, d = 18, 72
-    for sx, sy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-        ox, oy = cx + sx * d, cy + sy * d
-        cv2.line(out, (ox, oy), (ox + sx * b, oy), red, 1)
-        cv2.line(out, (ox, oy), (ox, oy + sy * b), red, 1)
-
-    cv2.putText(out, "LOCK: DETECTED", (cx - 52, cy + 105),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.38, red, 1, cv2.LINE_AA)
-    return out
-
-
-# ---------------------------------------------------------------------------
 # CLOAK_BLUR
 # ---------------------------------------------------------------------------
 def apply_cloak(frame: np.ndarray, strength: int = DEFAULT_BLUR_STRENGTH) -> np.ndarray:
@@ -218,7 +176,8 @@ def apply_mode(frame: np.ndarray, mode: str, params: dict) -> np.ndarray:
         return apply_zoom(frame, scale=params.get("scale", DEFAULT_ZOOM_SCALE))
 
     if mode == "TARGET_HUD":
-        return apply_target_hud(frame)
+        # Pass-through: ui/hud_overlays.py handles the dynamic reticle
+        return frame.copy()
 
     if mode == "CLOAK_BLUR":
         return apply_cloak(frame, strength=params.get("strength", DEFAULT_BLUR_STRENGTH))
