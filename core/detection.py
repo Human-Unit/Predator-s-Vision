@@ -8,14 +8,18 @@ import math
 import cv2
 import numpy as np
 import mediapipe as mp
+# Explicit import for compatibility with newer mediapipe versions
+try:
+    import mediapipe.python.solutions.hands as mp_hands
+except ImportError:
+    mp_hands = mp.solutions.hands
 
 # Load cascades once
 _FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 _EYE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
 
 # Mediapipe Hands
-_MP_HANDS = mp.solutions.hands
-_HANDS = _MP_HANDS.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.7)
+_HANDS = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.7)
 
 def detect_gesture(frame: np.ndarray) -> str:
     """
