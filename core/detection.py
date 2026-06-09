@@ -24,7 +24,14 @@ _HANDS = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_
 def detect_gesture(frame: np.ndarray) -> str:
     """
     Detect hand gestures to trigger visor modes.
-    Returns: "OPEN_PALM", "PEACE", "POINTING", or None
+    Extended Mapping:
+      - OPEN_PALM  -> All fingers up
+      - FIST       -> All fingers down
+      - PEACE      -> Index + Middle up
+      - POINTING   -> Index up
+      - ROCK_ON    -> Index + Pinky up
+      - THUMBS_UP  -> Thumb up, others down
+      - OK_SIGN    -> Thumb + Index tips touching
     """
     results = _HANDS.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     if not results.multi_hand_landmarks:
@@ -32,28 +39,47 @@ def detect_gesture(frame: np.ndarray) -> str:
 
     landmarks = results.multi_hand_landmarks[0].landmark
 
-    # 1. Open Palm (all fingers extended)
-    fingers_up = []
-
-    # Thumb: Check distance between tip and pinky base to determine if open
-    # (More reliable than simple x-axis for different hand rotations)
+    # Finger states (True = extended)
+    # Thumb: distance to pinky base
     thumb_open = math.sqrt((landmarks[4].x - landmarks[17].x)**2 + (landmarks[4].y - landmarks[17].y)**2) > 0.15
-    fingers_up.append(thumb_open)
 
-    # Fingers (y-axis: tip above pip)
-    for tip, pip in [(8, 6), (12, 10), (16, 14), (20, 18)]:
-        fingers_up.append(landmarks[tip].y < landmarks[pip].y)
+    # Tips: 8 (Index), 12 (Middle), 16 (Ring), 20 (Pinky)
+    # PIPs: 6 (Index), 10 (Middle), 14 (Ring), 18 (Pinky)
+    f_index  = landmarks[8].y < landmarks[6].y
+    f_middle = landmarks[12].y < landmarks[10].y
+    f_ring   = landmarks[16].y < landmarks[14].y
+    f_pinky  = landmarks[20].y < landmarks[18].y
 
-    if all(fingers_up):
+    # 1. OK SIGN (Special distance check)
+    dist_thumb_index = math.sqrt((landmarks[4].x - landmarks[8].x)**2 + (landmarks[4].y - landmarks[8].y)**2)
+    if dist_thumb_index < 0.05 and f_middle and f_ring and f_pinky:
+        return "OK_SIGN"
+
+    # 2. OPEN PALM
+    if thumb_open and f_index and f_middle and f_ring and f_pinky:
         return "OPEN_PALM"
 
-    # 2. Peace Sign (Index and Middle up)
-    if fingers_up[1] and fingers_up[2] and not any(fingers_up[3:]):
+    # 3. FIST
+    if not thumb_open and not f_index and not f_middle and not f_ring and not f_pinky:
+        return "FIST"
+
+    # 4. PEACE
+    if f_index and f_middle and not f_ring and not f_pinky:
         return "PEACE"
 
-    # 3. Pointing (Index up)
-    if fingers_up[1] and not any(fingers_up[2:]):
+    # 5. POINTING
+    if f_index and not f_middle and not f_ring and not f_pinky:
         return "POINTING"
+
+    # 6. ROCK ON
+    if f_index and f_pinky and not f_middle and not f_ring:
+        return "ROCK_ON"
+
+    # 7. THUMBS UP
+    if thumb_open and not f_index and not f_middle and not f_ring and not f_pinky:
+        # Check if thumb is actually pointing up relative to wrist
+        if landmarks[4].y < landmarks[3].y:
+            return "THUMBS_UP"
 
     return None
 
