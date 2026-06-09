@@ -47,6 +47,7 @@ Examples:
   "engage optical cloaking distortion" → {{"action": "CLOAK_BLUR",      "parameters": {{"strength": 25}}}}
   "switch to ultraviolet spectrum"     → {{"action": "SPECTRUM_SHIFT",  "parameters": {{"shift_type": "blue_only"}}}}
   "activate night vision"              → {{"action": "NIGHT_VISION",    "parameters": {{}}}}
+  "activate aim mode"                  → {{"action": "TARGET_HUD",      "parameters": {{}}}}
   "reset visor to normal"              → {{"action": "NORMAL_VISION",   "parameters": {{}}}}
 """
 
