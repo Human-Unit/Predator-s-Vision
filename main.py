@@ -202,7 +202,7 @@ def _vision_worker(input_q: multiprocessing.Queue, output_q: multiprocessing.Que
             final = apply_lens(hud_frame)
 
             # Send result back
-            output_q.put((final, targets, force_detect if mode == "AUTO_TARGET" else False, gesture))
+            output_q.put((final, targets, force_detect, gesture))
 
         except queue.Empty:
             continue

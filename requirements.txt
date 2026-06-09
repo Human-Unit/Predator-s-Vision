@@ -13,4 +13,4 @@ openai>=1.0.0              # OpenAI-compatible API client (works with LM Studio 
 numpy>=1.24.0              # Array math used throughout the vision pipeline
 python-dotenv>=1.0.0       # Optional: load .env file for API credentials
 pygame>=2.5.0              # Audio engine for HUD sound effects
-mediapipe>=0.10.0          # Hand gesture recognition
+mediapipe==0.10.13         # Pinned version for legacy .solutions support
