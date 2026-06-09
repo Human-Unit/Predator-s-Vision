@@ -58,8 +58,6 @@ def _palette(mode: str) -> dict:
 _VIGNETTE_CACHE: dict[tuple[int, int], np.ndarray] = {}
 _HEX_CACHE:      dict[tuple[int, int, str], np.ndarray] = {}
 
-# Pre-seed RNG for performance
-_RNG = np.random.default_rng()
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +440,54 @@ def _draw_header(out: np.ndarray, P: dict, h: int, w: int, t: float, mode: str) 
                 FONT, FONT_SCALE_MD, col_s, FONT_THICKNESS, cv2.LINE_AA)
 
 
+def _draw_motion_radar(out: np.ndarray, P: dict, h: int, w: int, t: float, targets: dict = None) -> None:
+    """
+    Cinematic Motion Tracker (bottom-right corner).
+    Draws a radar sweep and 'pings' detected motion targets.
+    """
+    col_p = P["primary"]
+    col_a = P["accent"]
+
+    # Radar dimensions
+    rad_size = int(min(h, w) * 0.18)
+    pad = 30
+    rx, ry = w - rad_size - pad, h - rad_size - pad
+    cx, cy = rx + rad_size // 2, ry + rad_size // 2
+
+    # Draw radar circle + grid
+    cv2.circle(out, (cx, cy), rad_size // 2, col_p, 1, cv2.LINE_AA)
+    cv2.circle(out, (cx, cy), rad_size // 4, col_p, 1, cv2.LINE_AA)
+    cv2.line(out, (cx - rad_size // 2, cy), (cx + rad_size // 2, cy), col_p, 1)
+    cv2.line(out, (cx, cy - rad_size // 2), (cx, cy + rad_size // 2), col_p, 1)
+
+    # Radar sweep line
+    sweep_ang = (t * 2.5) % (2 * math.pi)
+    sx = int(cx + (rad_size // 2) * math.cos(sweep_ang))
+    sy = int(cy + (rad_size // 2) * math.sin(sweep_ang))
+    cv2.line(out, (cx, cy), (sx, sy), col_p, 2, cv2.LINE_AA)
+
+    # Motion Pings
+    motion_pts = []
+    if isinstance(targets, dict):
+        motion_pts = targets.get("motion", [])
+
+    for pt in motion_pts:
+        # Map frame coords (w, h) to radar polar coords
+        mx, my = pt
+        dx = (mx - w // 2) / (w // 2) # -1 to 1
+        dy = (my - h // 2) / (h // 2) # -1 to 1
+
+        px = int(cx + dx * (rad_size // 2.2))
+        py = int(cy + dy * (rad_size // 2.2))
+
+        # Only draw if within radar circle
+        if math.sqrt((px - cx)**2 + (py - cy)**2) < rad_size // 2:
+            cv2.circle(out, (px, py), 3, col_a, -1, cv2.LINE_AA)
+
+    cv2.putText(out, "MOTION TRACKER", (rx, ry - 10),
+                FONT, FONT_SCALE_SM, col_p, FONT_THICKNESS, cv2.LINE_AA)
+
+
 def _draw_footer(out: np.ndarray, P: dict, h: int, w: int, t: float) -> None:
     """Bottom bar: GPS coords left, prey count right."""
     pad   = 20
@@ -548,6 +594,7 @@ def draw_hud(
     # ── 9. Footer ───────────────────────────────────────────────────────────
     if not is_low_res:
         _draw_footer(out, P, h, w, t)
+        _draw_motion_radar(out, P, h, w, t, targets=targets)
 
     # ── 10. Routing banner ───────────────────────────────────────────────────
     if routing_active and int(t * 3) % 2 == 0:
