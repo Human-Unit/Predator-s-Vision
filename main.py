@@ -58,7 +58,10 @@ class VisorState:
     def set_mode(self, mode: str, params: dict) -> None:
         with self._lock:
             if self.mode != mode:
-                audio.play("MODE_CHANGE")
+                if mode in ("TARGET_HUD", "AUTO_TARGET"):
+                    audio.play("AIM_MODE")
+                else:
+                    audio.play("MODE_CHANGE")
             self.mode          = mode
             self.params        = params
             self.error_state   = False
@@ -261,6 +264,14 @@ def run_active_mode(router: YautjaRouter) -> None:
                 state.set_mode("THERMAL_VISION", {})
             elif gesture == "POINTING":
                 state.set_mode("TARGET_HUD", {})
+            elif gesture == "ROCK_ON":
+                state.set_mode("AUTO_TARGET", {})
+            elif gesture == "THUMBS_UP":
+                state.set_mode("NIGHT_VISION", {})
+            elif gesture == "OK_SIGN":
+                state.set_mode("TACTICAL_ZOOM", {"scale": 2.0})
+            elif gesture == "FIST":
+                state.set_mode("NORMAL_VISION", {})
 
             # Handle sound in main thread
             if detected and targets and targets.get("faces"):
